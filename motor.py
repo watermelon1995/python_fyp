@@ -1,5 +1,7 @@
 import numpy as np
+import rospy
 
+from std_msgs.msg import UInt8
 from geometry_msgs.msg import Twist
 
 class Motor:
@@ -21,6 +23,7 @@ class Motor:
                 closest_command = key
 
         print self.robot_movement_table.get(closest_command)
+        print closest_command
         return closest_command
 
     def computeTwistDifferent(self, target_twist, reference_twist):
@@ -41,8 +44,10 @@ class Motor:
     def getTwist(self, action_number):
         if (256 > action_number >= 0):
             action_key = self.action_space[action_number]
+            print "A : {}".format(action_key)
             twist = self.robot_movement_table.get(action_key)
         else:
+            print "Get Twist out of bound"
             twist = self.robot_movement_table.get((64,192))
         return twist
 
@@ -76,7 +81,30 @@ class Motor:
         for m1 in range(0, 127+1):
             for m2 in range(128, 255+1):
                 vel_cmd = Twist()
-                vel_cmd.linear.x = ( self.wheel_velocity_table[m1] + self.wheel_velocity_table[m2] ) / 2.0
-                vel_cmd.angular.z = ( self.wheel_velocity_table[m1] - self.wheel_velocity_table[m2] ) / 0.189
+                # should be m2 - m1
+                vel_cmd.linear.x = ( self.wheel_velocity_table[m2] + self.wheel_velocity_table[m1] ) / 2.0
+                vel_cmd.angular.z = ( self.wheel_velocity_table[m2] - self.wheel_velocity_table[m1] ) / 0.189
                 self.robot_movement_table[(m1, m2)] = vel_cmd
                 vel_cmd = None
+
+class CmdNode:
+    def __init__(self):
+        rospy.init_node('cmd_vel_node', anonymous=True)
+        self.pub = rospy.Publisher('robot_command', UInt8, queue_size = 10)
+        rospy.Subscriber('/robot_cmd_vel', Twist, self.callback)
+        self.motor = Motor()
+
+
+    def callback(self, data):
+        command1, command2 = self.motor.transformTwist(data)
+        self.pub.publish(command1)
+        self.pub.publish(command2)
+
+    def run(self):
+        r = rospy.Rate(10)
+        while not rospy.is_shutdown():
+            r.sleep()
+
+if __name__ == "__main__":
+    node = CmdNode()
+    node.run()

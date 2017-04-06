@@ -20,25 +20,51 @@ class Simulator():
     def __init__(self):
         rospy.init_node('learning_environment', anonymous=True)
         self.update_box = rospy.ServiceProxy('/stdr_server/updateBox', Empty)
-        # self.reset = rospy.ServiceProxy('/stdr_server/reset', Empty)
+        self.reset_box = rospy.ServiceProxy('/stdr_server/resetBox', Empty)
         self.reset_robot = rospy.ServiceProxy('/robot0/replace', MoveRobot)
         self.vel_pub = rospy.Publisher('/robot0/cmd_vel', Twist, queue_size=2)
         self.motor = Motor();
+        self.last_difference = 0.0
+        self.target_pose = [0,0,0]
 
     def reset(self):
-        newPose = Pose2D()
-        x_upper_limit = (15.5 - 0.7)
-        x_lower_limit = 0.7
-        y_upper_limit = (14.92 - 0.7)
-        y_lower_limit = 0.7
-        newPose.x = (x_upper_limit - x_lower_limit) * np.random.random_sample() + x_lower_limit
-        newPose.y = (y_upper_limit - y_lower_limit) * np.random.random_sample() + y_lower_limit
-        newPose.theta = 2*math.pi * np.random.random_sample()
-        rospy.wait_for_service('/robot0/replace')
+
+        rospy.wait_for_service('/stdr_server/resetBox')
         try:
-            self.reset_robot(newPose)
+            self.reset_box()
         except rospy.ServiceException as exc:
             print ('Service did not process request' + str(exc))
+
+        replace_done = False
+
+        while replace_done != True:
+            newPose = Pose2D()
+            x_upper_limit = (15.5 - 0.7)
+            x_lower_limit = 0.7
+            y_upper_limit = (14.92 - 0.7)
+            y_lower_limit = 0.7
+            newPose.x = (x_upper_limit - x_lower_limit) * np.random.random_sample() + x_lower_limit
+            newPose.y = (y_upper_limit - y_lower_limit) * np.random.random_sample() + y_lower_limit
+            newPose.theta = 2*math.pi * np.random.random_sample()
+            rospy.wait_for_service('/robot0/replace')
+            try:
+                self.reset_robot(newPose)
+                print "Replace robot done"
+                replace_done = True
+            except rospy.ServiceException as exc:
+                print ('Service did not process request' + str(exc))
+
+
+        self.last_difference = 0.0
+
+        self.target_pose[0] = (x_upper_limit - x_lower_limit) * np.random.random_sample() + x_lower_limit
+        self.target_pose[1] = (y_upper_limit - y_lower_limit) * np.random.random_sample() + y_lower_limit
+        self.target_pose[2] = 2*math.pi * np.random.random_sample()
+
+        state , done, collision = self.getState(self.target_pose)
+        self.last_difference =  math.sqrt((state[360] - self.target_pose[0])**2 + (state[361] - self.target_pose[1])**2 )
+
+        return state
 
 
     def getState(self, target_pose):
@@ -50,13 +76,13 @@ class Simulator():
         collision = False
         while raw_data is None:
             try:
-                raw_data = rospy.client.wait_for_message('/robot0/laser_0', LaserScan, timeout = 5)
+                raw_data = rospy.client.wait_for_message('/robot0/laser_0', LaserScan, timeout = 10)
             except Exception as e:
                 raise
 
         while raw_current_pose is None:
             try:
-                raw_current_pose = rospy.client.wait_for_message('/robot0/odom', Odometry, timeout = 5)
+                raw_current_pose = rospy.client.wait_for_message('/robot0/odom', Odometry, timeout = 10)
             except Exception as e:
                 raise
 
@@ -81,8 +107,8 @@ class Simulator():
         """
             Check is the target position is reached
         """
-        if ((target_pose[0] +0.05 > pose_data[0] > target_pose[0]-0.05) and \
-            (target_pose[1] +0.05 > pose_data[1] > target_pose[1]-0.05 )):
+        if ((target_pose[0] +0.2 > pose_data[0] > target_pose[0]-0.2) and \
+            (target_pose[1] +0.2 > pose_data[1] > target_pose[1]-0.2 )):
                 done = True
 
         return range_data + pose_data, done, collision
@@ -95,7 +121,7 @@ class Simulator():
         self.vel_pub.publish(cmd_vel)
         # self.vel_pub
 
-    def step(self, action, target_pose):
+    def step(self, action):
 
         rospy.wait_for_service('/stdr_server/updateBox')
         try:
@@ -105,24 +131,35 @@ class Simulator():
 
         self.sendAction(action)
 
-        state, done, collision = self.getState(target_pose)
+        state, done, collision = self.getState(self.target_pose)
+
+        info = ""
 
         if (done == True and collision == True):
             reward = -100
+            info = "crashed"
+            print "Target crashed"
         elif (done == True and collision == False):
-            reward = +200
+            reward = 200
+            info = "reached"
+            print "Target reached"
         else:
-            reward = -0.1
+            this_difference = math.sqrt((state[360] - self.target_pose[0])**2 + (state[361] - self.target_pose[1])**2 )
+            if (this_difference > self.last_difference):
+                reward = -1
+            else:
+                reward = +1
+            info = "moving"
 
-        return state, reward , done , {}
+        return state, reward , done , info
 
 
 
 
 
-
-s = Simulator()
-observation, done, collision = s.getState([3.76, 2.46, 1.23]);
-# print len(observation)
-# print len(s.motor.action_space)
-s.reset()
+#
+# s = Simulator()
+# observation, done, collision = s.getState([3.76, 2.46, 1.23]);
+# # print len(observation)
+# # print len(s.motor.action_space)
+# s.reset()
